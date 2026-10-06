@@ -1,0 +1,7 @@
+# Offline use. The classroom demo (scripts/teaching_demo.py) needs only
+# Python 3.10+ and no packages. These are for opening the historical notebook.
+pandas>=2.0
+numpy
+scipy
+matplotlib
+jupyter

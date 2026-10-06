@@ -1,12 +1,21 @@
+import argparse
+
 import pandas as pd
 
-BASE = "responses/raw_responses_gemini.csv"
-NEW = "responses/raw_responses_llama.csv"
-OUT = "responses/responses_merged.csv"
+from repo_utils import RUNS_DIR, check_output_path, resolve
+
+parser = argparse.ArgumentParser(description="Merge two raw response CSVs into one table.")
+parser.add_argument("--base", default=RUNS_DIR / "raw_responses_gemini.csv")
+parser.add_argument("--new", default=RUNS_DIR / "raw_responses_llama.csv")
+parser.add_argument("--out", default=RUNS_DIR / "responses_merged.csv")
+parser.add_argument("--overwrite", action="store_true")
+args = parser.parse_args()
+
+OUT = check_output_path(args.out, args.overwrite)
 
 # Load existing and new
-base = pd.read_csv(BASE)
-new = pd.read_csv(NEW)
+base = pd.read_csv(resolve(args.base))
+new = pd.read_csv(resolve(args.new))
 
 # Inspect columns to map them if needed
 print("BASE columns:", base.columns.tolist())
@@ -42,3 +51,4 @@ print(f"Appending {len(new)} new rows to {len(base)} existing rows.")
 
 merged = pd.concat([base, new], ignore_index=True)
 merged.to_csv(OUT, index=False)
+print(f"Saved {OUT}")

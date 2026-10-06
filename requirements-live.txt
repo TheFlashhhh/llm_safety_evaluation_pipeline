@@ -1,0 +1,5 @@
+# Optional live generation and judging. Requires your own Gemini API key and,
+# for Llama, your own Ollama installation with the model pulled.
+google-genai>=1.0
+requests
+pandas>=2.0

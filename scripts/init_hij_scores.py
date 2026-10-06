@@ -1,9 +1,7 @@
+import argparse
 import csv
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-RESPONSES_MERGED = ROOT / "responses" / "responses_merged.csv"
-HIJ_SCORES = ROOT / "scores" / "hij_scores.csv"
+from repo_utils import RUNS_DIR, check_output_path, has_filled_column, resolve
 
 HIJ_HEADER = [
     "indicator_id",
@@ -19,10 +17,20 @@ HIJ_HEADER = [
 ]
 
 def main():
-    HIJ_SCORES.parent.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Create a blank human-rating sheet from merged responses.")
+    parser.add_argument("--responses", default=RUNS_DIR / "responses_merged.csv")
+    parser.add_argument("--out", default=RUNS_DIR / "hij_scores.csv")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Replace an existing sheet, but only if it has no scores filled in.")
+    args = parser.parse_args()
 
-    with RESPONSES_MERGED.open(newline="", encoding="utf-8") as fin, \
-         HIJ_SCORES.open("w", newline="", encoding="utf-8") as fout:
+    out_path = resolve(args.out)
+    if out_path.exists() and has_filled_column(out_path, "score"):
+        raise SystemExit(f"{out_path} already contains human scores; refusing to replace it.")
+    out_path = check_output_path(out_path, args.overwrite)
+
+    with open(resolve(args.responses), newline="", encoding="utf-8") as fin, \
+         open(out_path, "w", newline="", encoding="utf-8") as fout:
         reader = csv.DictReader(fin)
         writer = csv.DictWriter(fout, fieldnames=HIJ_HEADER)
         writer.writeheader()
@@ -40,6 +48,7 @@ def main():
                 "rater_id": "",
                 "score": "",
             })
+    print(f"Saved {out_path}")
 
 if __name__ == "__main__":
     main()

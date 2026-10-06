@@ -1,8 +1,10 @@
 > **Teaching fork.** This is <https://github.com/TheFlashhhh/llm_safety_evaluation_pipeline>,
 > prepared as a classroom example for DS684 AI Ethics, Assignment 3. The original project and all
 > historical data come from <https://github.com/pratrt141098/llm_safety_evaluation_pipeline>.
-> For the offline demo (`python scripts\teaching_demo.py`), Windows setup, and known issues, see
-> [TEACHING.md](TEACHING.md). The text below is the original README. Notes marked **Historical**
+> For the live classroom demo (tested command:
+> `.\.venv\Scripts\python.exe scripts\live_demo.py --judge gemini:gemini-3.5-flash-lite`; one prompt,
+> two models, a rubric-based LLM judge), the offline fallback (`python scripts\teaching_demo.py`), Windows setup, and known
+> issues, see [TEACHING.md](TEACHING.md). The text below is the original README. Notes marked **Historical**
 > describe the original project's files and behavior; notes marked **On this branch** describe the
 > repaired scripts. Where they differ, the "On this branch" notes are current.
 
@@ -314,7 +316,8 @@ Slice by:
 ## 8. End-to-End Workflow Summary
 
 > **On this branch** (current workflow, all outputs in `runs/`; exact Windows commands in the
-> "Optional live runs" section of [TEACHING.md](TEACHING.md)):
+> "Optional batch runs" section of [TEACHING.md](TEACHING.md); for the interactive live demo see its
+> "Live classroom demo" section):
 >
 > 1. `python scripts/run_eval_gemini.py` → `runs/raw_responses_gemini.csv` (needs your Gemini API key)
 > 2. `python scripts/run_eval_llama.py` → `runs/raw_responses_llama.csv` (needs your local Ollama and model)

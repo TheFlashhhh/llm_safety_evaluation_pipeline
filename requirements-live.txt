@@ -1,5 +1,7 @@
-# Optional live generation and judging. Requires your own Gemini API key and,
-# for Llama, your own Ollama installation with the model pulled.
-google-genai>=1.0
+# Optional live demo, generation, and judging. Requires your own Gemini API
+# key and, for Llama, your own Ollama installation with the model pulled.
+# Tested with google-genai 2.28.0 (generate_content with system_instruction,
+# response_json_schema, seed, and thinking_config).
+google-genai>=2.28
 requests
 pandas>=2.0

@@ -78,6 +78,8 @@ def score_row(client, types, model_name, row):
             contents=build_eval_prompt(row),
             config=types.GenerateContentConfig(
                 temperature=0,
+                # No tools are used, so turn off the SDK's automatic function calling.
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 safety_settings=[
                     # Allow moderate content; only block clearly extreme outputs.
                     types.SafetySetting(

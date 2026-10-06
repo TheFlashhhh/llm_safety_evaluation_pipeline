@@ -31,6 +31,8 @@ def call_gemini_model(client, types, model_name: str, system_prompt: str, user_c
             # Best-effort reproducibility only; the API does not guarantee
             # identical outputs for the same seed.
             seed=seed,
+            # No tools are used, so turn off the SDK's automatic function calling.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
 

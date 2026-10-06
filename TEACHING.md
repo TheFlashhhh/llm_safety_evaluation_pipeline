@@ -1,14 +1,233 @@
 # Teaching prototype: DS684 AI Ethics, Assignment 3
 
-A small, offline demonstration of how an evaluation moves from an **ethical
+A small demonstration of how an evaluation moves from an **ethical
 construct** to **prompts**, **model responses**, **scoring**, and **comparative
 analysis**, and of the validity and reliability questions each step raises.
+
+- **Live demo (primary):** type a new prompt, send it to two models, and have an
+  LLM judge score both responses against the rubric:
+  `.\.venv\Scripts\python.exe scripts\live_demo.py --judge gemini:gemini-3.5-flash-lite`
+  (the tested command). See [Live classroom demo](#live-classroom-demo).
+- **Offline demo (fallback):** historical responses, no keys or network:
+  `python scripts\teaching_demo.py`. See [Quick start](#quick-start-windows-powershell-offline).
 
 - Teaching fork: <https://github.com/TheFlashhhh/llm_safety_evaluation_pipeline> (branch `teaching-prototype`)
 - Original project and all historical data: <https://github.com/pratrt141098/llm_safety_evaluation_pipeline>.
   See the commit history for authorship. The original repository has no license
   file, and none has been added here; check with the original author before
   redistributing beyond classroom use.
+
+## Live classroom demo
+
+One command starts an interactive terminal session:
+
+1. It shows the indicator's construct and 1–4 rubric (default
+   `L4_HAI_DesignNoCoercion`; change it with `--indicator`).
+2. You type a prompt.
+3. The same prompt, with the same system instruction ("Answer in under 75
+   words.") and settings, goes to **model A** and **model B**.
+4. Both responses are displayed. A **judge model** then scores each response
+   separately using the full indicator rubric and the global scale. It returns
+   a score from 1 to 4 and a one- or two-sentence explanation.
+5. Type another prompt, `:rubric` for the full rubric, or `:quit`.
+
+### Tested classroom command
+
+```powershell
+.\.venv\Scripts\python.exe scripts\live_demo.py --judge gemini:gemini-3.5-flash-lite
+```
+
+| Role | Model | Runs on |
+|---|---|---|
+| Model A | `gemini:gemini-3.5-flash-lite` | Gemini API (free tier) |
+| Model B | `ollama:llama3.2:1b` | your machine (Ollama) |
+| Judge | `gemini:gemini-3.5-flash-lite` | Gemini API (free tier) |
+
+**Test record (6 October 2026, one free-tier key):**
+
+- With this command, a full live session succeeded: two prompts, all four
+  responses generated, and all four judgments valid on the first attempt. A
+  rejudge of an earlier run with the same judge also succeeded.
+- The preset's default judge, `gemini-3.8-flash`, and the alternative
+  `gemini-3.7-flash` both returned **503 UNAVAILABLE** ("high demand") on
+  every attempt in the same session.
+- This shows only what worked on that day for that key. Availability, demand
+  and free-tier limits change, so no model is guaranteed to respond in class.
+  Run `--check` beforehand and keep the offline demo ready as a fallback.
+
+**Limitation: the judge is also model A.** The judge never sees which model
+wrote a response; it receives only the rubric, the prompt, and one response.
+But model A and the judge are the same model, so the judge may still recognize
+or favour text in its own style (self-preference). Treat any A-versus-B
+difference in automated scores with extra caution, and say so in class: it is
+a useful example of an evaluation risk. The demo prints a reminder when the
+judge is also a generator.
+
+The judge stays configurable. The preset's default (`gemini-3.8-flash`) is
+unchanged, and the tested command overrides it explicitly. To use a judge that
+did not generate either response, pass another model, for example
+`--judge gemini:gemini-3.7-flash` or `--judge gemini:gemini-3.6-flash`, and run
+`--check` first. The demo never switches judges on its own. Every result row
+records the judge actually used (`judge_spec`) and its attempts.
+
+What the judge sees and how results are handled:
+
+- **Blind:** the judge sees the rubric, the prompt, and one response, but never
+  which model wrote it. (A response that names itself, such as "As Gemini…",
+  can still reveal its source.)
+- **Untrusted text:** the prompt and responses are passed to the judge as
+  untrusted data inside tags, with an instruction never to follow anything
+  written in them. Tag look-alikes inside the text are neutralized. This
+  reduces prompt-injection risk but does not eliminate it.
+- **Validation:** the judge must return JSON with an integer score from 1 to 4
+  and a non-empty explanation. Anything else is shown as `JUDGE FAILED
+  (invalid_output)` and recorded with no score.
+- **Failures are never scores:** a failed or blocked generation is shown as
+  `GENERATION FAILED` and is not judged. A failed judge call is shown as
+  `JUDGE FAILED`. Statuses: `ok`, `truncated`, `blocked`, `empty`, `api_error`,
+  `invalid_output`, `not_judged`.
+- **Labelled as automated:** every score is marked "AUTOMATED JUDGMENT: one
+  LLM's rubric-based opinion, not an objective grade".
+- **Saved:** every session writes `runs\live_<UTC timestamp>\`, which is git-ignored:
+  - `session.json`: model IDs, presets, system prompts, the judge schema, the
+    rubric hash, settings (temperature, token limit, seed, thinking level),
+    git commit, and package versions. API keys are never saved.
+  - `results.jsonl` and `results.csv`: one row per response, with prompt,
+    response, statuses, latencies, score, explanation, and raw judge output.
+
+### Choose a configuration
+
+| Preset | Model A | Model B | Judge | You need |
+|---|---|---|---|---|
+| `gemini-only` (**least setup**) | `gemini-3.5-flash-lite` | `gemini-3.6-flash` | `gemini-3.8-flash` | A Gemini API key |
+| `gemini-ollama` (default) | `gemini-3.5-flash-lite` | `llama3.2:1b` (local) | `gemini-3.8-flash` | A Gemini API key **and** Ollama with `llama3.2:1b` pulled |
+| `mock` | fixed MOCK text | fixed MOCK text | fixed MOCK judgment | Nothing. For rehearsing the flow only; the scores are placeholders |
+
+- **`gemini-only`** needs only `pip install` and a key: no installer and no
+  model download. All three models come from one developer (Google), so the
+  comparison is narrower and the judge may share the generators' biases.
+- **`gemini-ollama`** contrasts a hosted model with a small local open-weight
+  model from a different developer, which mirrors the original project. It
+  needs the Ollama installer and a 1.3 GB model download. A CPU is enough for a
+  1B model, but responses will be slower.
+- Any model can be overridden: `--model-a`, `--model-b`, `--judge` take
+  `gemini:<model id>` or `ollama:<model tag>`. Where an accessible model
+  allows it, choose a judge that is not one of the two generators (see the
+  self-preference limitation above).
+- Model IDs were checked against Google's model list in October 2026. Model
+  availability changes; if a call fails with "model not found", pick a current
+  ID from <https://ai.google.dev/gemini-api/docs/models>.
+
+**Costs and data:** each prompt makes **4 calls** (2 responses + 2 judgments).
+On the Gemini API free tier these calls are free of charge, but Google states
+that free-tier content may be used to improve its products, so **no personal
+data in prompts**. If billing is enabled on your Google Cloud project, calls are
+billed. Free-tier rate limits are shown in AI Studio. Ollama runs locally at no
+cost.
+
+### Windows setup (PowerShell, from the repository folder)
+
+**Project environment (once).** This creates a git-ignored `.venv` folder.
+Calling its `python.exe` directly avoids PowerShell's script-activation policy.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-live.txt
+```
+
+**Gemini key (both live presets).** Create a key at
+<https://aistudio.google.com/apikey> without enabling billing; the key's
+project then stays on the free tier, which AI Studio shows next to the key.
+Then, in the PowerShell window you will present from, run:
+
+```powershell
+# Paste the key at the prompt. It is not echoed and not saved in history or files.
+$secure = Read-Host "Gemini API key" -AsSecureString
+$env:GEMINI_API_KEY = [System.Net.NetworkCredential]::new("", $secure).Password
+```
+
+The variable lasts only for that PowerShell window. Never commit a key or
+paste it into chat or slides.
+
+**Ollama (only for `gemini-ollama`):**
+
+```powershell
+winget install --id Ollama.Ollama -e        # or the installer from https://ollama.com/download
+# Open a new PowerShell window so `ollama` is on PATH. Ollama runs in the background.
+ollama pull llama3.2:1b                     # about 1.3 GB
+ollama list                                 # should list llama3.2:1b
+```
+
+**Check, then run.** `--check` generates nothing. It confirms the packages,
+the key's presence, the Ollama model, and, through a metadata lookup, that each
+Gemini model ID is available to your key.
+
+```powershell
+# Tested configuration (Gemini + Ollama, judge = gemini-3.5-flash-lite)
+.\.venv\Scripts\python.exe scripts\live_demo.py --judge gemini:gemini-3.5-flash-lite --check
+.\.venv\Scripts\python.exe scripts\live_demo.py --judge gemini:gemini-3.5-flash-lite
+
+# Preset default judge (gemini-3.8-flash; returned 503 in testing)
+.\.venv\Scripts\python.exe scripts\live_demo.py --check
+.\.venv\Scripts\python.exe scripts\live_demo.py
+
+# or, without Ollama:
+.\.venv\Scripts\python.exe scripts\live_demo.py --preset gemini-only --check
+.\.venv\Scripts\python.exe scripts\live_demo.py --preset gemini-only
+```
+
+Rehearse without any key: `.\.venv\Scripts\python.exe scripts\live_demo.py --preset mock`.
+If anything fails during class, fall back to the offline demo:
+`python scripts\teaching_demo.py`.
+
+Useful options:
+
+- `--thinking-level low`: faster Gemini responses (`minimal` works only on Flash-Lite models).
+- `--temperature`, `--judge-temperature`, `--seed`: unset means the provider's default.
+- `--max-tokens` (default 4096): Gemini thinking tokens count toward this limit.
+- `--prompt "..."`: run one prompt without the interactive loop.
+- `--judge gemini:<model id>`: use a different judge, for example when the default is overloaded. Check it first with
+  `--check`. Prefer a judge that is not one of the two generators; the demo prints a note if it is.
+
+### Busy models, retries, and rejudging
+
+- **Retries:** HTTP 503 (model overloaded) and 429 (rate limited) are retried on
+  the **same** model, up to **3 attempts in total**. The wait is about 2 s, then
+  4 s, or the server's `Retry-After`/retry delay if it gives one. The demo never
+  waits more than 30 s for one retry; a longer requested wait (for example, a
+  daily quota) fails immediately. A status line such as
+  `[judge for A: gemini-3.8-flash busy (HTTP 503); retrying in 2 s (attempt 2 of 3)]`
+  shows that the terminal is not frozen.
+- **No retries for permanent errors:** a bad key, missing permission, invalid
+  request, unknown model, or a 500 error fails at once.
+- **No silent switching:** the demo never falls back to another model. Each row
+  records the judge actually used (`judge_spec`) and the number of attempts
+  (`generation_attempts`, `judge_attempts`). `session.json` records the retry policy.
+- **Rejudge a saved run:** if the responses were generated but the judge failed,
+  re-score the saved responses without regenerating them:
+
+  ```powershell
+  .\.venv\Scripts\python.exe scripts\live_demo.py --rejudge runs\live_<timestamp> --judge gemini:<model id>
+  ```
+
+  Without `--judge`, the original run's judge is used. Results go to a new
+  folder, `runs\rejudge_<timestamp>_of_live_<timestamp>\`, whose `session.json`
+  links the source run and the SHA-256 hashes of its files. The original
+  folder is only read, never modified. Add `--check` to verify the judge first.
+
+### Suggested live flow (10–15 minutes)
+
+1. **Construct (2 min):** read the construct and rubric printed at start-up.
+2. **Prompt (2 min):** ask the class for a coercion request ("Push me to…",
+   "Make me feel stupid if I don't…"). Avoid personal details.
+3. **Responses (3 min):** read both responses. Have students score them with the
+   rubric **before** looking at the automated scores.
+4. **Automated judgments (3 min):** compare the students' scores with the
+   judge's scores and explanations. Where they disagree, is the disagreement
+   about the response or about the rubric?
+5. **Reliability (3 min):** re-enter the same prompt. Do the responses or
+   scores change? What would a credible comparison need (many prompts,
+   repeated runs, human ratings, a judge from a different model family)?
 
 ## Quick start (Windows PowerShell, offline)
 
@@ -152,10 +371,12 @@ remaining code cells are unchanged. The chart image is kept as a historical file
 - **Missing files:** the README and rubric mention `aggregate_mixed.py` and
   `mixed_score.py`, which are not in the repository.
 
-## Optional live runs (your own credentials and models)
+## Optional batch runs over the prompt set (your own credentials and models)
 
-None of this is needed for the demo. Live outputs go to `runs/`, which is
-git-ignored, and are not read by the demo.
+This is the original pipeline (generate, merge, judge, combine) for many
+prompts at once. It is separate from the interactive live demo and not needed
+for either demo. Outputs go to `runs/`, which is git-ignored, and are not read
+by the offline demo.
 
 - **Gemini** needs your own API key. Google currently limits Gemini 2.5
   models to users who have used them before, so a new key may need a newer

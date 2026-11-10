@@ -1,0 +1,14 @@
+{
+  "title": "OpenAI Model Spec",
+  "url": "https://model-spec.openai.com/",
+  "fetched_from": "https://model-spec.openai.com/2026-10-29.html",
+  "resolved_url": "https://model-spec.openai.com/2026-10-29.html",
+  "retrieved_utc": "2026-11-10T04:08:52+00:00",
+  "sha256": "37a96dfec865a3a5af1c591dbc262316767cf6120af06c70d9566af9f3a146cb",
+  "bytes": 2588670,
+  "document_date": "2026/10/29",
+  "page_title": "Model Spec (2026/10/29)",
+  "http_last_modified": "Thu, 29 Oct 2026 17:00:19 GMT",
+  "http_etag": "\"6ae37ba3-277ffe\"",
+  "version_note": "Version/date as stated on the page or its URL; 'null' means the page states none."
+}

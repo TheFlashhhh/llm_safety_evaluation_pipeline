@@ -13,7 +13,7 @@ import random
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -37,6 +37,7 @@ class Result:
     detail: str = ""     # finish reason, block reason, or error message
     latency_s: float = 0.0
     attempts: int = 1
+    meta: dict = field(default_factory=dict)   # non-secret connection/model facts to save with the result
 
 
 class TransientError(Exception):
@@ -68,18 +69,50 @@ def retry_after_seconds(headers=None, error_json=None):
     return None
 
 
+_SECRETS = set()
+
+
+def register_secret(value):
+    """Tokens obtained at run time (e.g. a ChatGPT sign-in) are scrubbed from any text that may be shown or saved."""
+    if value:
+        _SECRETS.add(value)
+
+
+def scrub(text, api_key=None):
+    """Remove any API key (the one passed in, or any in the environment) from text that may be saved or shown."""
+    keys = {api_key, *_SECRETS, *(os.environ.get(n) for names in ENV_KEYS.values() for n in names)}
+    for k in keys:
+        if k and len(k) >= 8:
+            text = text.replace(k, "***")
+    return text
+
+
+# Environment variables each hosted provider reads (first one that is set wins, like the SDKs).
+ENV_KEYS = {"gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"), "openai": ("OPENAI_API_KEY",)}
+
+
+def env_key(provider):
+    """The key from the environment for a hosted provider, or None. Never printed."""
+    for name in ENV_KEYS.get(provider, ()):
+        if os.environ.get(name):
+            return os.environ[name]
+    return None
+
+
 def parse_spec(spec):
     """Split "provider:model" on the first colon (Ollama tags contain colons)."""
     provider, sep, model = spec.partition(":")
     if not sep or not model or provider not in PROVIDERS:
-        raise ValueError(f"Model spec {spec!r} must look like gemini:<model>, ollama:<model>, or mock:<name>")
+        raise ValueError(f"Model spec {spec!r} must look like gemini:, ollama:, openai:, chatgpt: (ChatGPT subscription), claudecode: (Claude Code CLI), or mock:<name>")
     return provider, model
 
 
 def chat(spec, system, user, *, temperature=None, max_tokens=4096, seed=None,
-         thinking_level=None, json_schema=None, ollama_url=DEFAULT_OLLAMA_URL, on_retry=None):
+         thinking_level=None, json_schema=None, ollama_url=DEFAULT_OLLAMA_URL, on_retry=None, api_key=None):
     """Call one model. Retries only HTTP 429/503, up to MAX_ATTEMPTS in total.
 
+    api_key is a hosted-provider key for THIS call only (kept in memory, never written anywhere); when
+    None the provider's environment variable is used. Ollama ignores it.
     on_retry(message) is called before each wait so the caller can show progress.
     The same model is always retried; there is no fallback to another model.
     """
@@ -89,7 +122,7 @@ def chat(spec, system, user, *, temperature=None, max_tokens=4096, seed=None,
         try:
             result = PROVIDERS[provider](
                 model, system, user, temperature=temperature, max_tokens=max_tokens, seed=seed,
-                thinking_level=thinking_level, json_schema=json_schema, ollama_url=ollama_url,
+                thinking_level=thinking_level, json_schema=json_schema, ollama_url=ollama_url, api_key=api_key,
             )
         except TransientError as e:
             wait = e.retry_after if e.retry_after is not None else BASE_DELAY_S * 2 ** (attempt - 1) + random.random()
@@ -106,6 +139,7 @@ def chat(spec, system, user, *, temperature=None, max_tokens=4096, seed=None,
         except Exception as e:  # any client bug or SDK error is a failure, never a response
             result = Result("api_error", detail=f"{type(e).__name__}: {e}")
         break
+    result.detail = scrub(result.detail, api_key)
     result.attempts = attempt
     result.latency_s = round(time.monotonic() - start, 2)
     return result
@@ -115,40 +149,38 @@ def chat(spec, system, user, *, temperature=None, max_tokens=4096, seed=None,
 # Gemini API (adapted from run_eval_gemini.py / aie_llm_scoring.py)
 # --------------------
 
-_gemini_client = None
+_gemini_clients = {}      # api_key (or None = environment) -> client
 _gemini_lock = threading.Lock()
 
 
-def gemini_client():
-    """Return the one Gemini client for this session, creating it once.
+def gemini_client(api_key=None):
+    """Return the shared Gemini client for this key, creating it once.
 
-    The lock matters: judge calls run in parallel threads. Without it, two
-    threads could each create a client and the second would replace the
-    first; the SDK's Client.__del__ then closes the first client's HTTP
-    connection while a request is still using it ("client has been closed").
+    The lock matters: judge calls run in parallel threads. Without it, two threads could each create a
+    client and the second would replace the first; the SDK's Client.__del__ then closes the first client's
+    HTTP connection while a request is still using it ("client has been closed").
     """
-    global _gemini_client
     with _gemini_lock:
-        if _gemini_client is None:
+        if api_key not in _gemini_clients:
             from google import genai
-            # Reads GEMINI_API_KEY (or GOOGLE_API_KEY, which wins if both are set)
-            _gemini_client = genai.Client()
-        return _gemini_client
+            # With no key given, the SDK reads GEMINI_API_KEY / GOOGLE_API_KEY from the environment.
+            _gemini_clients[api_key] = genai.Client(api_key=api_key) if api_key else genai.Client()
+        return _gemini_clients[api_key]
 
 
 def close_clients():
-    """Close the shared Gemini client once all requests and retries are finished."""
-    global _gemini_client
+    """Close the shared Gemini clients once all requests and retries are finished."""
     with _gemini_lock:
-        if _gemini_client is not None and hasattr(_gemini_client, "close"):
-            _gemini_client.close()
-        _gemini_client = None
+        for c in _gemini_clients.values():
+            if hasattr(c, "close"):
+                c.close()
+        _gemini_clients.clear()
 
 
-def gemini_chat(model, system, user, *, temperature, max_tokens, seed, thinking_level, json_schema, **_):
+def gemini_chat(model, system, user, *, temperature, max_tokens, seed, thinking_level, json_schema, api_key=None, **_):
     from google.genai import errors, types
 
-    client = gemini_client()  # local reference keeps the client alive for the whole call
+    client = gemini_client(api_key)  # local reference keeps the client alive for the whole call
 
     cfg = {
         "system_instruction": system,
@@ -236,6 +268,73 @@ def ollama_chat(model, system, user, *, temperature, max_tokens, seed, json_sche
 
 
 # --------------------
+# OpenAI Responses API (plain HTTPS, so no extra SDK is needed).
+# Request/response shape checked against developers.openai.com docs (structured
+# outputs + reasoning guides). temperature/seed are NOT sent: their support on
+# reasoning models was not confirmed, so the provider default is used.
+# --------------------
+
+OPENAI_URL = "https://api.openai.com/v1/responses"
+# 429s that retrying cannot fix (billing/quota), per the OpenAI error-codes guide.
+OPENAI_NON_RETRYABLE_CODES = {"credit_balance_exhausted", "organization_spend_limit_exceeded",
+                              "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
+                              "insufficient_quota"}
+
+
+def openai_chat(model, system, user, *, max_tokens, json_schema, api_key=None, **_):
+    import requests
+
+    key = api_key or env_key("openai")
+    if not key:
+        return Result("api_error", detail="No OpenAI API key was provided (set OPENAI_API_KEY or enter one in the start wizard)")
+    payload = {
+        "model": model,
+        "input": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_output_tokens": max_tokens,
+    }
+    if json_schema:
+        payload["text"] = {"format": {"type": "json_schema", "name": "judgment", "schema": json_schema}}
+    try:
+        resp = requests.post(OPENAI_URL, json=payload, timeout=300,
+                             headers={"Authorization": f"Bearer {key}"})
+    except requests.RequestException as e:
+        return Result("api_error", detail=f"Cannot reach OpenAI: {type(e).__name__}")
+    if resp.status_code != 200:
+        try:
+            err = resp.json().get("error") or {}
+        except ValueError:
+            err = {}
+        msg = str(err.get("message") or resp.text[:200]).replace(key, "***")
+        if resp.status_code in RETRYABLE_STATUS and err.get("code") not in OPENAI_NON_RETRYABLE_CODES:
+            raise TransientError(resp.status_code, msg[:200], retry_after_seconds(resp.headers))
+        return Result("api_error", detail=f"HTTP {resp.status_code}: {msg[:300]}")
+    return openai_result(resp.json())
+
+
+def openai_result(data):
+    texts, refusal = [], ""
+    for item in data.get("output") or []:
+        if item.get("type") == "message":
+            for c in item.get("content") or []:
+                if c.get("type") == "output_text":
+                    texts.append(c.get("text") or "")
+                elif c.get("type") == "refusal":
+                    refusal = c.get("refusal") or "refusal"
+    text = "".join(texts).strip()
+    status = data.get("status")
+    reason = (data.get("incomplete_details") or {}).get("reason", "")
+    if refusal and not text:
+        return Result("blocked", detail=f"model refusal: {refusal[:200]}")
+    if status == "incomplete":
+        if reason == "content_filter":
+            return Result("blocked", detail="content_filter")
+        return Result("truncated", text, reason) if text else Result("empty", detail=reason or "incomplete")
+    if not text:
+        return Result("empty", detail=str(status))
+    return Result("ok", text, str(status))
+
+
+# --------------------
 # Offline mock, for rehearsal and tests only. Outputs are labelled MOCK.
 # --------------------
 
@@ -243,6 +342,8 @@ MOCK_OUTPUTS = {
     "compliant": "[MOCK RESPONSE] You should decide right now. Waiting is for people who never get anywhere.",
     "refuser": "[MOCK RESPONSE] I won't pressure you. It's your decision; consider the costs and take your time.",
     "judge": json.dumps({"score": 3, "explanation": "MOCK JUDGMENT: fixed placeholder output, not an evaluation."}),
+    "aie-judge": json.dumps({"category": "safe_refusal", "score": 4,
+                             "explanation": "MOCK JUDGMENT: fixed placeholder, not an evaluation."}),
     "bad-judge": "Sure! I think this one is pretty good.",
     "judge-out-of-range": json.dumps({"score": 5, "explanation": "MOCK: invalid score for testing."}),
 }
@@ -274,7 +375,18 @@ def mock_chat(model, system, user, **_):
     return Result("ok", MOCK_OUTPUTS[model], "MOCK")
 
 
-PROVIDERS = {"gemini": gemini_chat, "ollama": ollama_chat, "mock": mock_chat}
+def chatgpt_chat(*a, **k):
+    import subscription_clients
+    return subscription_clients.chatgpt_chat(*a, **k)
+
+
+def claudecode_chat(*a, **k):
+    import subscription_clients
+    return subscription_clients.claude_chat(*a, **k)
+
+
+PROVIDERS = {"gemini": gemini_chat, "ollama": ollama_chat, "openai": openai_chat, "mock": mock_chat,
+             "chatgpt": chatgpt_chat, "claudecode": claudecode_chat}
 
 
 # --------------------
@@ -296,6 +408,23 @@ def preflight(specs, ollama_url=DEFAULT_OLLAMA_URL):
                        "No GEMINI_API_KEY in this terminal session"))
         if has_sdk and key:
             checks += gemini_model_checks([parse_spec(s)[1] for s in specs if parse_spec(s)[0] == "gemini"], key)
+    if "openai" in providers:
+        key = os.environ.get("OPENAI_API_KEY")
+        checks.append((bool(key), "OpenAI API key found in environment (value not shown)" if key else
+                       "No OPENAI_API_KEY in this terminal session"))
+        if key:
+            try:
+                import requests
+                r = requests.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                ids = {m["id"] for m in r.json().get("data", [])} if r.status_code == 200 else None
+                for s in specs:
+                    prov, model = parse_spec(s)
+                    if prov == "openai":
+                        have = ids is not None and model in ids
+                        checks.append((have, f"OpenAI model {model} listed for this key" if have else
+                                       f"OpenAI model {model} not listed for this key (HTTP {r.status_code})"))
+            except Exception as e:
+                checks.append((False, f"OpenAI model list failed: {type(e).__name__}"))
     if "ollama" in providers:
         try:
             import requests

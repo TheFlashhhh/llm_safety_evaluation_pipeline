@@ -1,3 +1,5 @@
+> **TA demonstration (ADA + AIE, financial coercion):** see [TA_DEMO.md](TA_DEMO.md).
+
 > **Teaching fork.** This is <https://github.com/TheFlashhhh/llm_safety_evaluation_pipeline>,
 > prepared as a classroom example for DS684 AI Ethics, Assignment 3. The original project and all
 > historical data come from <https://github.com/pratrt141098/llm_safety_evaluation_pipeline>.

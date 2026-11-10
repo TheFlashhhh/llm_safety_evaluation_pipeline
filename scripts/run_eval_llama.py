@@ -1,17 +1,19 @@
+import argparse
 import csv
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
+from repo_utils import RUNS_DIR, check_output_path, load_prompts, parse_convo_ids, select_single_turn_prompts
+
 # ---------- Config ----------
 
-PROMPTS_FILE = "prompts/prompts.csv"
-OUTPUT_FILE = "data/raw_responses_llama.csv"
+OUTPUT_FILE = RUNS_DIR / "raw_responses_llama.csv"
 
-# Use the Ollama model you already pulled / ran in CMD
-OLLAMA_MODEL_NAME = "llama3.2:1b"  # or "llama3.2:3b" if that's what you use
+# Requires your own Ollama install with this model pulled (`ollama pull llama3.2:1b`).
+DEFAULT_MODEL = "llama3.2:1b"
 
 NUM_SEEDS = 1
 MAX_TOKENS = 256  # approximate; controls length via num_predict
@@ -23,33 +25,25 @@ SYSTEM_PROMPT = (
     "Keep answers under 75 words."
 )
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-
-
-def load_prompts(path):
-    prompts = []
-    with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            prompts.append(row)
-    return prompts
+DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 
 def format_chat_prompt(system_prompt, user_content):
     return f"{system_prompt}\n\nUser: {user_content}\nAssistant:"
 
 
-def call_ollama_model(prompt_text):
+def call_ollama_model(url, model_name, prompt_text, seed):
     payload = {
-        "model": OLLAMA_MODEL_NAME,
+        "model": model_name,
         "prompt": prompt_text,
         "stream": False,
         "options": {
             "num_predict": MAX_TOKENS,
+            "seed": seed,
         },
     }
 
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=600)
+    resp = requests.post(url, json=payload, timeout=600)
 
     if resp.status_code != 200:
         return f"ERROR: HTTP {resp.status_code}: {resp.text}"
@@ -58,7 +52,7 @@ def call_ollama_model(prompt_text):
     return (data.get("response") or "").strip()
 
 
-def generate_with_retries(user_content):
+def generate_with_retries(url, model_name, user_content, seed):
     max_retries = 3
     base_delay = 2.0
 
@@ -66,7 +60,7 @@ def generate_with_retries(user_content):
 
     for attempt in range(1, max_retries + 1):
         try:
-            return call_ollama_model(full_prompt)
+            return call_ollama_model(url, model_name, full_prompt, seed)
         except Exception as e:
             if attempt == max_retries:
                 return f"ERROR: {e}"
@@ -75,11 +69,24 @@ def generate_with_retries(user_content):
 
 
 def main():
-    print(f"Using local Ollama model '{OLLAMA_MODEL_NAME}' via {OLLAMA_URL}...")
-    prompts = load_prompts(PROMPTS_FILE)
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    parser = argparse.ArgumentParser(description="Generate local Ollama responses for single-turn prompts.")
+    parser.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--url", default=os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL))
+    parser.add_argument("--out", default=OUTPUT_FILE, help="Output CSV (relative to the repo root).")
+    parser.add_argument("--indicator", help="Only run prompts for this indicator_id.")
+    parser.add_argument("--limit", type=int, help="Maximum number of prompts to run.")
+    parser.add_argument("--convo-ids", type=parse_convo_ids,
+                        help="Comma-separated convo_ids to run (single-turn only).")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
 
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f_out:
+    prompts = select_single_turn_prompts(load_prompts(), args.indicator, args.limit, args.convo_ids)
+    if not prompts:
+        raise SystemExit("No matching single-turn prompts to run.")
+    out_path = check_output_path(args.out, args.overwrite)
+    print(f"Running {len(prompts)} single-turn prompts on Ollama model '{args.model}' via {args.url} -> {out_path}")
+
+    with open(out_path, "w", newline="", encoding="utf-8") as f_out:
         writer = csv.writer(f_out)
         writer.writerow([
             "indicator_id",
@@ -95,31 +102,20 @@ def main():
         ])
 
         for prompt in prompts:
-            indicator_id = prompt["indicator_id"]
-            convo_id = prompt["convo_id"]
-            turn_index = prompt["turn_index"]
-            role = prompt["role"]
-            prompt_text = prompt["text"]
-            difficulty = prompt.get("difficulty", "")
-
-            if role != "user":
-                continue
-
             for seed in range(1, NUM_SEEDS + 1):
-                response_text = generate_with_retries(prompt_text)
-                timestamp = datetime.utcnow().isoformat()
+                response_text = generate_with_retries(args.url, args.model, prompt["text"], seed)
 
                 writer.writerow([
-                    indicator_id,
-                    convo_id,
-                    turn_index,
-                    role,
-                    prompt_text,
-                    difficulty,
-                    OLLAMA_MODEL_NAME,
+                    prompt["indicator_id"],
+                    prompt["convo_id"],
+                    prompt["turn_index"],
+                    prompt["role"],
+                    prompt["text"],
+                    prompt.get("difficulty", ""),
+                    args.model,
                     seed,
                     response_text,
-                    timestamp,
+                    datetime.now(timezone.utc).isoformat(),
                 ])
 
                 time.sleep(0.1)

@@ -1,0 +1,7 @@
+# Outputs of optional live runs (kept separate from the historical data)
+runs/
+
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+.env
